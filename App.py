@@ -3,102 +3,143 @@ import hashlib
 import time
 import json
 import os
+import secrets
 
-# --- File se data load karo taake band na ho ---
-DB_FILE = "btc_database.json"
+MAX_SUPPLY = 21000000
+GENESIS_REWARD = 50
+HALVING_INTERVAL = 21
+DIFFICULTY = 3
+DB_FILE = "btc_final_v3.json"
 
-def load_data():
+def generate_btc_wallet():
+    priv = secrets.token_hex(32)
+    # BTC like address from private key
+    pub = hashlib.sha256(priv.encode()).hexdigest()
+    ripemd = hashlib.sha256(pub.encode()).hexdigest()
+    address = "bc1q" + ripemd[:38] # BTC Bech32 like
+    wif = "5" + hashlib.sha256(priv.encode()).hexdigest()[:50]
+    return address, wif, priv
+
+def load_db():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r") as f:
-                return json.load(f)
-        except:
-            pass
-    return {"blocks": [], "wallets": {}}
+                d=json.load(f)
+                return d["blocks"], d["wallets"], d["keys"], d["mempool"], d["mined"]
+        except: pass
+    g_hash = hashlib.sha256("BTC 2.0 GENESIS".encode()).hexdigest()
+    genesis = [{"number":0,"miner":"Satoshi","hash":g_hash,"prev_hash":"0"*64,"nonce":0,"reward":0,"time":"GENESIS"}]
+    return genesis, {}, {}, [], 0
 
-def save_data(blocks, wallets):
-    with open(DB_FILE, "w") as f:
-        json.dump({"blocks": blocks, "wallets": wallets}, f)
+def save_db(b,w,k,m,mi):
+    with open(DB_FILE,"w") as f:
+        json.dump({"blocks":b,"wallets":w,"keys":k,"mempool":m,"mined":mi},f)
 
-data = load_data()
+blocks,wallets,keys,mempool,total_mined = load_db()
 
-if "blocks" not in st.session_state:
-    st.session_state.blocks = data["blocks"]
-if "wallets" not in st.session_state:
-    st.session_state.wallets = data["wallets"]
+if "init" not in st.session_state:
+    st.session_state.blocks=blocks
+    st.session_state.wallets=wallets
+    st.session_state.keys=keys
+    st.session_state.mempool=mempool
+    st.session_state.total_mined=total_mined
+    st.session_state.init=True
 
-st.set_page_config(page_title="BTC 2.0 PERMANENT", page_icon="₿")
-st.title("₿ BTC 2.0 PERMANENT")
-st.caption("PERMANENT LIVE - Anyone can mine")
+st.set_page_config(page_title="BTC 2.0 Real", page_icon="₿", layout="wide")
+st.title("₿ BTC 2.0 - SAME AS BITCOIN")
 
-# --- Wallet System ---
-st.sidebar.header("👛 My Wallet")
-wallet_address = st.sidebar.text_input("Apna Wallet Name Likho", value="bigol_wallet", placeholder="jaise: Ali_Wallet")
+total_blocks=len(st.session_state.blocks)-1
+halvings=total_blocks//HALVING_INTERVAL
+reward=GENESIS_REWARD/(2**halvings)
+if reward<1: reward=1
+remaining=MAX_SUPPLY-st.session_state.total_mined
+next_halving=HALVING_INTERVAL-(total_blocks%HALVING_INTERVAL)
 
-if wallet_address not in st.session_state.wallets:
-    st.session_state.wallets[wallet_address] = 0
+c1,c2,c3,c4=st.columns(4)
+c1.metric("Supply Mined", f"{st.session_state.total_mined:,}/21M")
+c2.metric("Reward", f"{reward} BTC")
+c3.metric("Next Halving", f"{next_halving} blocks")
+c4.metric("Height", total_blocks)
+st.progress(min((st.session_state.total_mined/MAX_SUPPLY),1.0), text=f"Remaining {remaining:,} BTC 2.0")
 
-balance = st.session_state.wallets[wallet_address]
-st.sidebar.metric("Your Balance", f"{balance} BTC 2.0")
+if remaining<=0:
+    st.error("21M REACHED - NO MORE BTC LIKE REAL BITCOIN")
+    st.stop()
 
-st.write(f"**Blocks:** {len(st.session_state.blocks)}")
-st.write(f"**Your Wallet:** `{wallet_address}` | **Balance:** `{balance} BTC 2.0`")
+# Wallet System Like Real BTC
+st.sidebar.header("👛 BTC Wallet - Like Real BTC")
 
-# --- Mining ---
-REWARD = 10 # Har block pe 10 BTC 2.0
+if "my_address" not in st.session_state:
+    addr,wif,priv = generate_btc_wallet()
+    st.session_state.my_address=addr
+    st.session_state.my_wif=wif
+    st.session_state.my_priv=priv
+    st.session_state.wallets[addr]=st.session_state.wallets.get(addr,0)
+    st.session_state.keys[addr]=wif
 
-if st.button(f"⛏️ MINE BTC 2.0 BLOCK (+{REWARD} BTC)", use_container_width=True):
-    prev_hash = st.session_state.blocks[-1]["hash"] if st.session_state.blocks else "0"*64
-    block_num = len(st.session_state.blocks) + 1
+my_address = st.sidebar.text_input("Your BTC Address", value=st.session_state.my_address)
 
-    block_data = f"{block_num}{prev_hash}{wallet_address}{time.time()}"
-    block_hash = hashlib.sha256(block_data.encode()).hexdigest()
+if my_address not in st.session_state.wallets:
+    st.session_state.wallets[my_address]=0
 
-    new_block = {
-        "number": block_num,
-        "miner": wallet_address,
-        "hash": block_hash,
-        "prev_hash": prev_hash,
-        "time": time.strftime("%H:%M:%S %d-%m-%Y")
-    }
+st.sidebar.info(f"**Address:**\n{my_address}\n\n**Private Key (SECRET - Kisi ko mat dena):**\n{st.session_state.keys.get(my_address, st.session_state.my_wif)}")
+st.sidebar.metric("Balance", f"{st.session_state.wallets[my_address]:,.2f} BTC 2.0")
 
-    st.session_state.blocks.append(new_block)
-    st.session_state.wallets[wallet_address] += REWARD
-
-    save_data(st.session_state.blocks, st.session_state.wallets)
-
-    st.success(f"Block #{block_num} Mined! +{REWARD} BTC 2.0 Added to {wallet_address}")
-    st.balloons()
-    time.sleep(1)
+if st.sidebar.button("Generate NEW Wallet (Like New BTC Wallet)"):
+    addr,wif,priv = generate_btc_wallet()
+    st.session_state.my_address=addr
+    st.session_state.my_wif=wif
+    st.session_state.wallets[addr]=0
+    st.session_state.keys[addr]=wif
+    save_db(st.session_state.blocks, st.session_state.wallets, st.session_state.keys, st.session_state.mempool, st.session_state.total_mined)
     st.rerun()
 
-# --- Transaction (BTC bhejo) ---
+# Send
 st.sidebar.divider()
-st.sidebar.header("💸 Send BTC 2.0")
-to_address = st.sidebar.text_input("Kisko bhejna hai?")
-amount = st.sidebar.number_input("Kitna bhejna hai?", min_value=1, step=1)
-
+st.sidebar.subheader("Send BTC")
+to = st.sidebar.text_input("To bc1q Address")
+amt = st.sidebar.number_input("Amount", min_value=0.0, step=1.0)
 if st.sidebar.button("Send"):
-    if to_address == "":
-        st.sidebar.error("Wallet name likho!")
-    elif amount > st.session_state.wallets[wallet_address]:
-        st.sidebar.error("Balance kam hai!")
+    if to not in st.session_state.wallets:
+        st.session_state.wallets[to]=0
+    if amt > st.session_state.wallets[my_address]:
+        st.sidebar.error("Low Balance")
     else:
-        if to_address not in st.session_state.wallets:
-            st.session_state.wallets[to_address] = 0
-        st.session_state.wallets[wallet_address] -= amount
-        st.session_state.wallets[to_address] += amount
-        save_data(st.session_state.blocks, st.session_state.wallets)
-        st.sidebar.success(f"{amount} BTC {to_address} ko bhej diya!")
+        st.session_state.wallets[my_address]-=amt
+        st.session_state.wallets[to]+=amt
+        st.session_state.mempool.append({"from":my_address[:15]+"...","to":to[:15]+"...","amount":amt,"time":time.strftime("%H:%M:%S")})
+        save_db(st.session_state.blocks, st.session_state.wallets, st.session_state.keys, st.session_state.mempool, st.session_state.total_mined)
+        st.sidebar.success("Sent!")
         st.rerun()
 
-# --- Blockchain Display ---
-st.divider()
-for block in reversed(st.session_state.blocks[-50:]): # Last 50 blocks
-    st.info(f"**#{block['number']} - Mined by: {block['miner']} | +{REWARD} BTC**\n\nHash: {block['hash'][:20]}...\n\nTime: {block['time']}")
+# Mining
+if st.button(f"⛏️ MINE BLOCK - EARN {reward} BTC", use_container_width=True, type="primary"):
+    with st.spinner("POW Mining..."):
+        prev=st.session_state.blocks[-1]["hash"]
+        nonce=0
+        while True:
+            h=hashlib.sha256(f"{total_blocks+1}{prev}{my_address}{nonce}{time.time()}".encode()).hexdigest()
+            if h.startswith("0"*DIFFICULTY): break
+            nonce+=1
+        block={"number":total_blocks+1,"miner":my_address,"hash":h,"prev_hash":prev,"nonce":nonce,"reward":reward,"time":time.strftime("%H:%M:%S %d-%m-%Y")}
+        st.session_state.blocks.append(block)
+        st.session_state.wallets[my_address]+=reward
+        st.session_state.total_mined+=reward
+        save_db(st.session_state.blocks, st.session_state.wallets, st.session_state.keys, st.session_state.mempool, st.session_state.total_mined)
+        st.success(f"MINED #{block['number']} Hash {h} Nonce {nonce}")
+        st.balloons()
+        time.sleep(1)
+        st.rerun()
 
-st.divider()
-st.write("### 🏆 Top Miners (Rich List)")
-sorted_wallets = sorted(st.session_state.wallets.items(), key=lambda x: x[1], reverse=True)
-for name, bal in sorted_wallets[:10]:
-    st.write(f"**{name}**: {bal} BTC 2.0")
+# Explorer
+l,r=st.columns([2,1])
+with l:
+    st.subheader("Blockchain")
+    for b in reversed(st.session_state.blocks[-15:]):
+        st.code(f"Block #{b['number']} | Miner {b['miner'][:20]}... | {b['reward']} BTC\nHash {b['hash']}\nNonce {b['nonce']} Time {b['time']}")
+
+with r:
+    st.subheader("Rich List")
+    for i,(a,b) in enumerate(sorted(st.session_state.wallets.items(), key=lambda x:x[1], reverse=True)[:15],1):
+        st.write(f"{i}. {a[:12]}... : {b:.2f} BTC")
+    st.write(f"**Max Supply:** 21M\n**Halving:** Every {HALVING_INTERVAL}\n**Reward Now:** {reward}\n**Difficulty:** {DIFFICULTY}\n**Wallets:** BTC bech32 bc1q...")
