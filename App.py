@@ -1,57 +1,84 @@
-import streamlit as st, hashlib, time, secrets, datetime
-st.set_page_config(page_title="BTC 2.0", page_icon="₿", layout="wide")
+import streamlit as st, hashlib, time, secrets, datetime, json, os, io
+import qrcode
+from mnemonic import Mnemonic
+import bip32utils
+import hashlib
+from bech32 import bech32_encode, convertbits
+
+st.set_page_config(page_title="BTC 2.0 REAL BIP39", page_icon="₿", layout="wide")
+DB_FILE = "btc_database.json"
+
 def h(s): return hashlib.sha256(s.encode()).hexdigest()
-def wallet():
-    r=secrets.token_hex(16); x=h(r)
-    return "bc1q"+x[:38], "5K"+h(x+"p")[:49]
+
+def make_qr(text):
+    qr=qrcode.QRCode(version=1,box_size=6,border=2)
+    qr.add_data(text); qr.make(fit=True)
+    img=qr.make_image(fill='black',back_color='white')
+    buf=io.BytesIO(); img.save(buf,format="PNG")
+    return buf.getvalue()
+
+def bip39_to_btc_address(mnemonic_phrase):
+    # BIP39 -> Seed
+    mnemo = Mnemonic("english")
+    seed = mnemo.to_seed(mnemonic_phrase, passphrase="")
+
+    # BIP32 Root
+    root_key = bip32utils.BIP32Key.fromEntropy(seed)
+
+    # BIP84 Path: m/84'/0'/0'/0/0 (Native SegWit bc1q)
+    # 84' = 0x80000000 + 84
+    purpose = root_key.ChildKey(84 + bip32utils.BIP32_HARDEN)
+    coin = purpose.ChildKey(0 + bip32utils.BIP32_HARDEN)
+    account = coin.ChildKey(0 + bip32utils.BIP32_HARDEN)
+    change = account.ChildKey(0)
+    addr_key = change.ChildKey(0)
+
+    # Get pubkey and create bc1q address
+    pubkey = addr_key.PublicKey()
+    # HASH160
+    sha = hashlib.sha256(pubkey).digest()
+    import hashlib
+    try:
+        rip = hashlib.new('ripemd160', sha).digest()
+    except:
+        from Crypto.Hash import RIPEMD160
+        rip = RIPEMD160.new(sha).digest()
+
+    # bech32 encode bc1q
+    hrp = "bc"
+    witver = 0
+    data = convertbits(rip, 8, 5)
+    bech32_addr = bech32_encode(hrp, [witver] + data)
+
+    # Private Key WIF
+    wif = addr_key.WalletImportFormat()
+
+    return bech32_addr, wif
+
+def load_db():
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE,"r") as f: return json.load(f)
+        except: pass
+    return {"chain":[],"bal":{},"txs":[],"mined":0,"wallets":{}}
+
+def save_db():
+    data={"chain":st.session_state.chain,"bal":st.session_state.bal,"txs":st.session_state.txs,"mined":st.session_state.mined,"wallets":st.session_state.wallets}
+    with open(DB_FILE,"w") as f: json.dump(data,f)
+
 if "chain" not in st.session_state:
-    st.session_state.chain=[]; st.session_state.bal={}; st.session_state.txs=[]; st.session_state.mined=0
-    a,p=wallet(); st.session_state.addr=a; st.session_state.priv=p; st.session_state.bal[a]=0; st.session_state.wallets={a:p}
-def rew(): return max(50/(2**(len(st.session_state.chain)//21)),0.5)
-def bal(a): return st.session_state.bal.get(a,0)
-ht=len(st.session_state.chain); rw=rew(); left=21000000-st.session_state.mined
-st.title("₿ BITCOIN 2.0 FULL")
-c1,c2,c3,c4=st.columns(4)
-c1.metric("Height",ht); c2.metric("Mined",f"{st.session_state.mined}/21M"); c3.metric("Reward",f"{rw}"); c4.metric("Left",f"{left:,.0f}")
-st.progress(min(st.session_state.mined/21000000,1.0))
-L,R=st.columns([1.2,1])
-with L:
-    st.subheader("⛏️ MINING")
-    if st.button(f"🚀 MINE BLOCK #{ht+1} +{rw} BTC",type="primary",use_container_width=True):
-        ph=st.session_state.chain[-1]["hash"] if st.session_state.chain else "0"*64
-        n=0; fh=None
-        with st.status("Mining..."):
-            for i in range(300000):
-                d=f"{ht}{ph}{st.session_state.addr}{n}{time.time()}"; hh=h(d)
-                if hh.startswith("000"): fh=hh; break
-                n+=1
-            if not fh: fh="000"+h(secrets.token_hex(8))[3:]
-            b={"height":ht+1,"hash":fh,"prev":ph,"miner":st.session_state.addr,"reward":rw,"nonce":n,"time":datetime.datetime.now().strftime("%H:%M:%S")}
-            st.session_state.chain.append(b); st.session_state.bal[st.session_state.addr]=bal(st.session_state.addr)+rw; st.session_state.mined+=rw
-            st.balloons(); st.rerun()
-    st.subheader("💸 SEND")
-    with st.container(border=True):
-        fa=st.selectbox("From",list(st.session_state.wallets.keys())); st.write(f"Bal: {bal(fa)} BTC")
-        ta=st.text_input("To bc1q..."); am=st.number_input("Amount",0.0,step=1.0)
-        if st.button("📤 SEND",use_container_width=True):
-            if not ta.startswith("bc1q"): st.error("bc1q address dalo")
-            elif bal(fa)<am: st.error(f"Balance kam {bal(fa)}")
-            elif am<=0: st.error("Amount >0")
-            else:
-                st.session_state.bal[fa]=bal(fa)-am; st.session_state.bal[ta]=bal(ta)+am
-                tx={"from":fa,"to":ta,"amount":am,"time":datetime.datetime.now().strftime("%H:%M:%S"),"txid":h(f"{fa}{ta}{am}{time.time()}")[:64]}
-                st.session_state.txs.append(tx); st.success(f"Sent {am} BTC"); st.rerun()
-with R:
-    st.subheader("👛 WALLET")
-    with st.container(border=True):
-        st.text_input("Address",value=st.session_state.addr); st.text_area("Private Key",value=st.session_state.priv,height=68)
-        st.metric("Balance",f"{bal(st.session_state.addr)} BTC")
-        if st.button("➕ New Wallet",use_container_width=True):
-            a,p=wallet(); st.session_state.wallets[a]=p; st.session_state.addr=a; st.session_state.priv=p; st.session_state.bal[a]=0; st.rerun()
-    st.subheader("📜 TXS")
-    for t in reversed(st.session_state.txs[-10:]): st.code(f"{t['from'][:15]}->{t['to'][:15]} {t['amount']} BTC\n{t['txid'][:30]}")
-st.divider()
-st.subheader("🔗 BLOCKS")
-if not st.session_state.chain: st.info("Mine karo!")
-else:
-    for b in reversed(st.session_state.chain[-10:]): st.success(f"#{b['height']} {b['hash'][:30]}... +{b['reward']} BTC Miner {b['miner'][:10]}... Nonce {b['nonce']}")
+    db=load_db()
+    st.session_state.chain=db.get("chain",[]); st.session_state.bal=db.get("bal",{}); st.session_state.txs=db.get("txs",[]); st.session_state.mined=db.get("mined",0); st.session_state.wallets=db.get("wallets",{})
+    if not st.session_state.wallets:
+        mnemo = Mnemonic("english")
+        phrase = mnemo.generate(strength=128) # 12 words
+        addr, wif = bip39_to_btc_address(phrase)
+        st.session_state.addr=addr; st.session_state.priv=wif; st.session_state.phrase=phrase
+        st.session_state.bal[addr]=0; st.session_state.wallets[addr]={"priv":wif,"phrase":phrase}
+        save_db()
+    else:
+        st.session_state.addr=list(st.session_state.wallets.keys())[0]
+        st.session_state.priv=st.session_state.wallets[st.session_state.addr]["priv"]
+        st.session_state.phrase=st.session_state.wallets[st.session_state.addr].get("phrase","old")
+
+def rew
