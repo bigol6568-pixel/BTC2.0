@@ -1,2 +1,3 @@
-git clone https://github.com/vkt-btc/VKT-BTC2.0-Core.git
-# Maine pehle se adjusted code isme dala hua hai - 1GB ready!
+# Satoshi Real BTC Code - No Change
+import os
+os.system("git clone https://github.com/bitcoin/bitcoin.git")
